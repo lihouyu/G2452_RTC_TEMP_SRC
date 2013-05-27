@@ -9,7 +9,7 @@
  *
  * Port definition
  * 		P1.0			1-Hz output
- * 		P1.1, P1.2		Reserved for UART
+ * 		P1.1, P1.2		Reserved for software UART (DEBUG)
  * 		P1.6, P1.7		USI I2C mode
  * 		P1.3			I2C slave address pin
  * 						High:	0x41 (default)
