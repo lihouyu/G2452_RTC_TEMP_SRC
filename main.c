@@ -9,7 +9,7 @@
  *
  * Port definition
  * 		P1.0			1-Hz output
- * 		P1.1, P1.2		Reserved for software UART (DEBUG)
+ * 		P1.1, P1.2		Reserved for UART (for MSP430G2553)
  * 		P1.6, P1.7		USI I2C mode
  * 		P1.3			I2C slave address pin
  * 						High:	0x41 (default)
@@ -19,7 +19,7 @@
  * 		P2.0~P2.5		Individual alarm interrupt output for 6 alarms
  */
 
-#include <msp430g2452.h>
+#include <msp430.h>
 #include "config.h"
 #include "functions.h"
 
