@@ -47,6 +47,9 @@ unsigned char _DATA_STORE[31];  // Data storage
                                 // 30: Alarm interrupt flags
 
 const unsigned int _half_second = 16384;    // Half of 1-Hz
+unsigned int _second_tick = 0;              // Ticker for a second
+
+unsigned char _RTC_byte_l = 0, _RTC_byte_h = 0; // For calculation use
 
 /***********************************************
  * Callback related variables (Mandatory)
@@ -203,15 +206,64 @@ void _UART_send_datetime() {
  */
 #pragma vector=TIMER0_A0_VECTOR
 __interrupt void Timer_A0(void) {
+    TACCR0 += _half_second;
+
     // Toggle P1.0 output level every 0.5s
     // to form a full 1-Hz square wave output
     P1OUT ^= BIT0;
 
+    _second_tick++; // Increment the ticker
+    if (_second_tick == 2) {    // It's 1 second
+        // Do the main time increment logic here
+        _DATA_STORE[0]++;
+        if (_DATA_STORE[0] == 0x5A) {   // Check second
+            _DATA_STORE[0] = 0x00;
+            _DATA_STORE[1]++;   // Add 1 minute
+        } else {
+            _RTC_byte_l = _DATA_STORE[0] << 4;
+            if (_RTC_byte_l == 0xA0) {
+                _RTC_byte_h = _DATA_STORE[0] >> 4;
+                _RTC_byte_h++;
+                _DATA_STORE[0] = _RTC_byte_h << 4;
+            }
+        }
+
+        if (_DATA_STORE[1] == 0x5A) {   // Check minute, same logic with minute
+            _DATA_STORE[1] = 0x00;
+            _DATA_STORE[2]++;   // Add 1 hour
+        } else {
+            _RTC_byte_l = _DATA_STORE[1] << 4;
+            if (_RTC_byte_l == 0xA0) {
+                _RTC_byte_h = _DATA_STORE[1] >> 4;
+                _RTC_byte_h++;
+                _DATA_STORE[1] = _RTC_byte_h << 4;
+            }
+        }
+
+        if (_DATA_STORE[2] == 0x24) {   // Check hour
+            _DATA_STORE[2] = 0x00;
+            _DATA_STORE[3]++;   // Add 1 day
+            _DATA_STORE[4]++;   // Add 1 date
+        } else {
+            _RTC_byte_l = _DATA_STORE[2] << 4;
+            if (_RTC_byte_l == 0xA0) {
+                _RTC_byte_h = _DATA_STORE[2] >> 4;
+                _RTC_byte_h++;
+                _DATA_STORE[2] = _RTC_byte_h << 4;
+            }
+        }
+
+        if (_DATA_STORE[3] == 0x08)     // Check day
+            _DATA_STORE[3] = 0x01;
+        else
+            _DATA_STORE[3]++;
+
+        _second_tick = 0;   // Reset ticker
+    }
+
 #ifdef _UART_OUTPUT
     _UART_send++;
 #endif
-
-    TACCR0 += _half_second;
 }
 
 #ifdef _UART_OUTPUT
