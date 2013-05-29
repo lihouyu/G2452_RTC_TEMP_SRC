@@ -1,12 +1,24 @@
 /*
  * Global configuration for RTC and Temperature source
  *
- *  Created on: 2013-5-27
- *      Author: hyli
+ * HouYu Li <karajan_ii@hotmail.com>
+ *
+ * No license applied. Use as you wish.
  */
 
 #ifndef CONFIG_H_
 #define CONFIG_H_
+
+/**
+ * Uncomment following line to enable UART output
+ * Comment for release build
+ */
+//#define _UART_OUTPUT
+#ifdef _UART_OUTPUT
+
+#define _UART_TXD	BIT2		// P1.2 as UART TXD
+
+#endif
 
 /**
  * Own I2C slave address

@@ -9,7 +9,7 @@
  *
  * Port definition
  * 		P1.0			1-Hz output
- * 		P1.1, P1.2		Reserved for UART (for MSP430G2553)
+ * 		P1.1, P1.2		Reserved for software UART (Transmit only)
  * 		P1.6, P1.7		USI I2C mode
  * 		P1.3			I2C slave address pin
  * 						High:	0x41 (default)
@@ -43,6 +43,22 @@ unsigned char _DATA_STORE[31];	// Data storage
 										// 1: All alarm interrupt output on P1.5
 										// 0: Each alarm interrupt output is mapped to P2.0~P2.5
 								// 30: Alarm interrupt flags
+
+const unsigned int _half_second = 16384;		// Half of 1-Hz
+
+// If software UART output enabled
+#ifdef _UART_OUTPUT
+/**
+ * Following value come from sample code of TI
+ */
+const unsigned int _UART_period_1200 = 0x1B;		// 27, period for generating 1200 baud rate for UART based on 32768-Hz
+unsigned char _UART_n_bit;							// Number of bits for each transmit
+unsigned int _UART_TX_data;							// Data buffer for UART TX
+
+unsigned char _UART_send = 0;						// Control bit for send data
+
+#endif
+
 /*
  * main.c
  */
@@ -60,27 +76,45 @@ void main(void) {
     P1REN |= BIT3;		// Enable pull resistors on P1.3
     P1OUT |= BIT3;		// Using pull-up resistor on P1.3
 
-    // Configure for ACLK
+#ifdef _UART_OUTPUT
+    // Setup P1.2 for TXD
+    P1SEL |= _UART_TXD;	// P1.2 as TA0.1 out1
+    P1DIR |= _UART_TXD; // P1.2 is output pin
+#endif
+
+    // Configure for ACLK, no division applied
     BCSCTL3 |= XCAP_3;	// BCSCTL3 |= 0x0C;
     					// XCAPx = 11, Oscillator capacitor ~12.5 pF
-    BCSCTL1 |= DIVA_3;	// BCSCTL1 |= 0x30;
-    					// DIVAx = 11, ACLK = LFXT1 / 8
-    //BCSCTL1 &= ~XTS;	// XTS = 0(Default), LFXT1 in Low-frequency mode
-    //BCSCTL3 &= 0xCF;	// LFXT1Sx = 00(Default), 32768-Hz crystal on LFXT1
 
     // Setup Timer
-    TACTL |= (TASSEL_1 + ID_3 + MC_1);	// TACTL |= (0x0100u + 0x00C0u + 0x0010u);
-										// TASSELx = 01, using ACLK as source
-										// IDx = 11, timer clock = ACLK / 8
-										// MCx = 01, up mode
-    TACCR0 = 256;						// The timer clock is 32768-Hz / 8 / 8 = 512
-										// Using 256 to output full 1-Hz cycle
+    TACTL |= (TASSEL_1 + MC_2);			// TASSELx = 01, using ACLK as source
+										// MCx = 02, continuous mode
+#ifdef _UART_OUTPUT
+    TACTL |= TAIE;						// TAIE, enable overflow interrupt
+#endif
+
+    TACCR0 = _half_second;				// The timer clock is 32768-Hz
+										// Using 16384 (_half_second) to output full 1-Hz cycle
     TACCTL0 |= CCIE;					// Enable timer capture interrupt
+
+#ifdef _UART_OUTPUT
+    // Initialize UART TA0.1
+    TACCTL1 = OUT;						// TXD idle at 1.
+#endif
 
     // Initialize data store values
     _init_DS();
 
     __enable_interrupt();
+
+    while(1) {
+#ifdef _UART_OUTPUT
+    	if (_UART_send == 2) {
+    		_UART_send_datetime();
+    		_UART_send = 0;
+    	}
+#endif
+    }
 }
 
 /**
@@ -98,6 +132,37 @@ void _init_DS() {
 	_DATA_STORE[7] = 0x20; // Century = 20
 }
 
+#ifdef _UART_OUTPUT
+/**
+ * Extra functions for software UART
+ */
+void _UART_TX_byte(unsigned char byte) {
+	// Code bases on TI's example
+	_UART_n_bit = 0xA;						// Load Bit counter, 8data + ST/SP
+	while (TACCR1 != TAR)					// Prevent async capture
+		TACCR1 = TAR;						// Current state of TA counter
+	TACCR1 += _UART_period_1200;			// Some time till first bit
+	_UART_TX_data = byte | 0x100;			// Add mark stop bit to _UART_TX_data
+	_UART_TX_data = _UART_TX_data << 1;		// Add space start bit
+	TACCTL1 = (OUTMOD0 + CCIE);				// TXD = mark = idle
+	while (TACCTL1 & CCIE);					// Wait for TX completion
+}
+
+void _UART_send_datetime() {
+	unsigned int idx = 8;
+	unsigned char byte_h, byte_l;
+	while(idx) {
+		byte_h = _DATA_STORE[idx - 1] >> 4;
+		byte_l = _DATA_STORE[idx - 1] << 4;
+		byte_l = byte_l >> 4;
+		_UART_TX_byte(byte_h + 0x30);	// The higher 4 bits of 1 byte and converted to numeric ASCII
+		_UART_TX_byte(byte_l + 0x30);	// The lower 4 bits of 1 byte and converted to numeric ASCII
+		idx--;
+	}
+	_UART_TX_byte(0x0A);				// Display a new line after each datetime line
+}
+#endif
+
 /**
  * The timer capture interrupt is set to happen every 0.5s
  */
@@ -107,5 +172,33 @@ __interrupt void Timer_A0(void) {
 	// to form a full 1-Hz square wave output
 	P1OUT ^= BIT0;
 
-	TACCTL0 &= ~CCIFG;
+#ifdef _UART_OUTPUT
+	_UART_send++;
+#endif
+
+	TACCR0 += _half_second;
 }
+
+#ifdef _UART_OUTPUT
+/**
+ * Interrupt for UART TX
+ */
+#pragma vector=TIMER0_A1_VECTOR
+__interrupt void Timer_A1(void) {
+	// We only honor TACCR1 interrupt
+	// for UART TX
+	if (TAIV == 0x02) {
+		TACCR1 += _UART_period_1200;
+		// Code bases on TI's example
+		if (_UART_n_bit == 0)
+	    	TACCTL1 &= ~CCIE;					// All bits TXed, disable interrupt
+		else {
+			TACCTL1 |= OUTMOD2;					// TX Space
+			if (_UART_TX_data & 0x01)
+				TACCTL1 &= ~OUTMOD2;			// TX Mark
+			_UART_TX_data = _UART_TX_data >> 1;
+			_UART_n_bit--;
+		}
+	}
+}
+#endif
