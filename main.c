@@ -255,8 +255,6 @@ __interrupt void Timer_A0(void) {
 
         if (_DATA_STORE[3] == 0x08)     // Check day
             _DATA_STORE[3] = 0x01;
-        else
-            _DATA_STORE[3]++;
 
         _second_tick = 0;   // Reset ticker
     }
