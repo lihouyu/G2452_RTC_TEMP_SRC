@@ -24,6 +24,7 @@
  * Own I2C slave address
  */
 #define _I2C_addr        0x41
+#define _I2C_addr_op1    0x43
 
 /**
  * Day mask bit for alarm setting

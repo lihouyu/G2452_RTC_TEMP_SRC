@@ -20,8 +20,10 @@
  */
 
 #include <msp430.h>
+
 #include "config.h"
 #include "functions.h"
+#include "USI_I2C_slave.h"
 
 unsigned char _DATA_STORE[31];  // Data storage
                                 // 0: RTC second in BCD
@@ -45,6 +47,13 @@ unsigned char _DATA_STORE[31];  // Data storage
                                 // 30: Alarm interrupt flags
 
 const unsigned int _half_second = 16384;    // Half of 1-Hz
+
+/***********************************************
+ * Callback related variables (Mandatory)
+ * Do not change the variable name
+ ***********************************************/
+unsigned char _USI_I2C_slave_n_byte = 0;
+//**********************************************/
 
 // If software UART output enabled
 #ifdef _UART_OUTPUT
@@ -105,6 +114,12 @@ void main(void) {
     // Initialize data store values
     _init_DS();
 
+    // Start I2C slave
+    if (P1IN & BIT3)
+        USI_I2C_slave_init(_I2C_addr);
+    else
+        USI_I2C_slave_init(_I2C_addr_op1);
+
     __enable_interrupt();
 
     while(1) {
@@ -131,6 +146,26 @@ void _init_DS() {
     _DATA_STORE[5] = 0x01;  // Month = 1
     _DATA_STORE[7] = 0x20;  // Century = 20
 }
+
+/***********************************************
+ * Mandatory functions for callback
+ * You can modify codes in these functions
+ *         to deal with data received
+ *         or data to be sent
+ *         but left function name unchanged
+ ***********************************************/
+unsigned char * USI_I2C_slave_TX_callback() {
+    return _DATA_STORE;
+}
+
+unsigned char USI_I2C_slave_RX_callback(unsigned char * byte) {
+    return 0;   // 0: No error; Not 0: Error in received data
+}
+
+void _USI_I2C_slave_reset_byte_count() {
+    _USI_I2C_slave_n_byte = 0;
+}
+//**********************************************/
 
 #ifdef _UART_OUTPUT
 /**
