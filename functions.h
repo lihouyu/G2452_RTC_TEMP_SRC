@@ -10,6 +10,7 @@
 #define FUNCTIONS_H_
 
 void _init_DS();
+void _check_leap_year();
 
 /***********************************************
  * Mandatory functions for callback
