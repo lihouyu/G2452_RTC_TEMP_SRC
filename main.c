@@ -207,24 +207,14 @@ void _time_increment() {
         _DATA_STORE[0] = 0x00;
         _DATA_STORE[1]++;   // Add 1 minute
     } else {
-        _RTC_byte_l = _DATA_STORE[0] << 4;
-        if (_RTC_byte_l == 0xA0) {
-            _RTC_byte_h = _DATA_STORE[0] >> 4;
-            _RTC_byte_h++;
-            _DATA_STORE[0] = _RTC_byte_h << 4;
-        }
+        _time_carry(_DATA_STORE);
     }
 
     if (_DATA_STORE[1] == 0x5A) {   // Check minute, same logic with minute
         _DATA_STORE[1] = 0x00;
         _DATA_STORE[2]++;   // Add 1 hour
     } else {
-        _RTC_byte_l = _DATA_STORE[1] << 4;
-        if (_RTC_byte_l == 0xA0) {
-            _RTC_byte_h = _DATA_STORE[1] >> 4;
-            _RTC_byte_h++;
-            _DATA_STORE[1] = _RTC_byte_h << 4;
-        }
+        _time_carry(_DATA_STORE + 1);
     }
 
     if (_DATA_STORE[2] == 0x24) {   // Check hour
@@ -232,12 +222,7 @@ void _time_increment() {
         _DATA_STORE[3]++;   // Add 1 day
         _DATA_STORE[4]++;   // Add 1 date
     } else {
-        _RTC_byte_l = _DATA_STORE[2] << 4;
-        if (_RTC_byte_l == 0xA0) {
-            _RTC_byte_h = _DATA_STORE[2] >> 4;
-            _RTC_byte_h++;
-            _DATA_STORE[2] = _RTC_byte_h << 4;
-        }
+        _time_carry(_DATA_STORE + 2);
     }
 
     if (_DATA_STORE[3] == 0x08)     // Check day
@@ -278,12 +263,7 @@ void _time_increment() {
         }
         break;
     default:
-        _RTC_byte_l = _DATA_STORE[4] << 4;
-        if (_RTC_byte_l == 0xA0) {
-            _RTC_byte_h = _DATA_STORE[4] >> 4;
-            _RTC_byte_h++;
-            _DATA_STORE[4] = _RTC_byte_h << 4;
-        }
+        _time_carry(_DATA_STORE + 4);
     }
 
     if (_DATA_STORE[5] == 0x13) {   // Check month
@@ -291,24 +271,14 @@ void _time_increment() {
         _DATA_STORE[6]++;   // Add 1 year
         _RTC_action_bits |= BIT2;   // Let's check the leap year later
     } else {
-        _RTC_byte_l = _DATA_STORE[5] << 4;
-        if (_RTC_byte_l == 0xA0) {
-            _RTC_byte_h = _DATA_STORE[5] >> 4;
-            _RTC_byte_h++;
-            _DATA_STORE[5] = _RTC_byte_h << 4;
-        }
+        _time_carry(_DATA_STORE + 5);
     }
 
     if (_DATA_STORE[6] == 0x9A) {   // Check year
         _DATA_STORE[6] = 0x00;
         _DATA_STORE[7]++;   // Add 1 century
     } else {
-        _RTC_byte_l = _DATA_STORE[6] << 4;
-        if (_RTC_byte_l == 0xA0) {
-            _RTC_byte_h = _DATA_STORE[6] >> 4;
-            _RTC_byte_h++;
-            _DATA_STORE[6] = _RTC_byte_h << 4;
-        }
+        _time_carry(_DATA_STORE + 6);
     }
     // After changes with the year
     if (_RTC_action_bits & BIT2) {
@@ -320,12 +290,19 @@ void _time_increment() {
     if (_DATA_STORE[7] == 0x9A) {   // Check century
         _DATA_STORE[7] = 0x00;  // Century start over
     } else {
-        _RTC_byte_l = _DATA_STORE[7] << 4;
-        if (_RTC_byte_l == 0xA0) {
-            _RTC_byte_h = _DATA_STORE[7] >> 4;
-            _RTC_byte_h++;
-            _DATA_STORE[7] = _RTC_byte_h << 4;
-        }
+        _time_carry(_DATA_STORE + 7);
+    }
+}
+
+/**
+ * Deal with carry
+ */
+void _time_carry(unsigned char * byte) {
+    _RTC_byte_l = *byte << 4;
+    if (_RTC_byte_l == 0xA0) {
+        _RTC_byte_h = *byte >> 4;
+        _RTC_byte_h++;
+        *byte = _RTC_byte_h << 4;
     }
 }
 
