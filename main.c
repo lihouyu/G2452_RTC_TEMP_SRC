@@ -51,9 +51,12 @@ unsigned char _DATA_STORE[31];  // Data storage
                                         // 0: Each alarm interrupt output is mapped to P2.0~P2.5
                                 // 30: Alarm interrupt flags
 
-const unsigned int _half_second = 16384;    // Half of 1-Hz
+const unsigned int _second_div = 2048;      // 1/16 of 1-Hz
 unsigned int _second_tick = 0;              // Ticker for a second
 unsigned char _is_leap_year = 0;            // Leap year indicator
+
+unsigned char _RTC_action_bits = 0x00;      // For marking actions in interrupt
+                                            // and run the action in the main loop
 
 unsigned char _RTC_byte_l = 0, _RTC_byte_h = 0; // For calculation use
 
@@ -72,9 +75,6 @@ unsigned char _USI_I2C_slave_n_byte = 0;
 const unsigned int _UART_period_1200 = 0x1B;    // 27, period for generating 1200 baud rate for UART based on 32768-Hz
 unsigned char _UART_n_bit;                      // Number of bits for each transmit
 unsigned int _UART_TX_data;                     // Data buffer for UART TX
-
-unsigned char _UART_send = 0;                   // Control bit for send data
-
 #endif
 
 /*
@@ -128,8 +128,9 @@ void main(void) {
     TACTL |= TAIE;              // TAIE, enable overflow interrupt
 #endif
 
-    TACCR0 = _half_second;      // The timer clock is 32768-Hz
-                                // Using 16384 (_half_second) to output full 1-Hz cycle
+    TACCR0 = _second_div;       // The timer clock is 32768-Hz
+                                // _second_div is 32768-Hz / 16
+                                // so that we have enough space for doing different actions
     TACCTL0 |= CCIE;            // Enable timer capture interrupt
 
 #ifdef _UART_OUTPUT
@@ -150,14 +151,18 @@ void main(void) {
 
     __enable_interrupt();
 
-#ifdef _UART_OUTPUT
     while(1) {
-        if (_UART_send == 2) {
-            _UART_send_datetime();
-            _UART_send = 0;
+        if (_RTC_action_bits & BIT0) {
+            _time_increment();
+            _RTC_action_bits &= ~BIT0;
         }
-    }
+#ifdef _UART_OUTPUT
+        if (_RTC_action_bits & BIT1) {
+            _UART_send_datetime();
+            _RTC_action_bits &= ~BIT1;
+        }
 #endif
+    }
 }
 
 /**
@@ -189,6 +194,138 @@ void _check_leap_year() {
     } else {
         if (_RTC_byte_l == 0x40 || _RTC_byte_l == 0x80)
             _is_leap_year = 1;
+    }
+}
+
+/**
+ * Do time increment
+ */
+void _time_increment() {
+    // Do the main time increment logic here
+    _DATA_STORE[0]++;
+    if (_DATA_STORE[0] == 0x5A) {   // Check second
+        _DATA_STORE[0] = 0x00;
+        _DATA_STORE[1]++;   // Add 1 minute
+    } else {
+        _RTC_byte_l = _DATA_STORE[0] << 4;
+        if (_RTC_byte_l == 0xA0) {
+            _RTC_byte_h = _DATA_STORE[0] >> 4;
+            _RTC_byte_h++;
+            _DATA_STORE[0] = _RTC_byte_h << 4;
+        }
+    }
+
+    if (_DATA_STORE[1] == 0x5A) {   // Check minute, same logic with minute
+        _DATA_STORE[1] = 0x00;
+        _DATA_STORE[2]++;   // Add 1 hour
+    } else {
+        _RTC_byte_l = _DATA_STORE[1] << 4;
+        if (_RTC_byte_l == 0xA0) {
+            _RTC_byte_h = _DATA_STORE[1] >> 4;
+            _RTC_byte_h++;
+            _DATA_STORE[1] = _RTC_byte_h << 4;
+        }
+    }
+
+    if (_DATA_STORE[2] == 0x24) {   // Check hour
+        _DATA_STORE[2] = 0x00;
+        _DATA_STORE[3]++;   // Add 1 day
+        _DATA_STORE[4]++;   // Add 1 date
+    } else {
+        _RTC_byte_l = _DATA_STORE[2] << 4;
+        if (_RTC_byte_l == 0xA0) {
+            _RTC_byte_h = _DATA_STORE[2] >> 4;
+            _RTC_byte_h++;
+            _DATA_STORE[2] = _RTC_byte_h << 4;
+        }
+    }
+
+    if (_DATA_STORE[3] == 0x08)     // Check day
+        _DATA_STORE[3] = 0x01;
+
+    switch (_DATA_STORE[4]) {       // Check date
+    case 0x29:
+        if (_DATA_STORE[5] == 0x02 && !_is_leap_year) {   // It's February
+            _DATA_STORE[4] = 0x01;
+            _DATA_STORE[5]++;
+        }
+        break;
+    case 0x30:
+        if (_DATA_STORE[5] == 0x02) {   // It's February
+            _DATA_STORE[4] = 0x01;
+            _DATA_STORE[5]++;
+        }
+        break;
+    case 0x31:
+        if (_DATA_STORE[5] == 0x04
+                || _DATA_STORE[5] == 0x06
+                || _DATA_STORE[5] == 0x09
+                || _DATA_STORE[5] == 0x11) {    // Apr, Jun, Sep, Nov with 30 days
+            _DATA_STORE[4] = 0x01;
+            _DATA_STORE[5]++;
+        }
+        break;
+    case 0x32:
+        if (_DATA_STORE[5] == 0x01
+                || _DATA_STORE[5] == 0x03
+                || _DATA_STORE[5] == 0x05
+                || _DATA_STORE[5] == 0x07
+                || _DATA_STORE[5] == 0x08
+                || _DATA_STORE[5] == 0x10
+                || _DATA_STORE[5] == 0x12) {    // Jan, Mar, May, Jul, Aug, Oct, Dec with 31 days
+            _DATA_STORE[4] = 0x01;
+            _DATA_STORE[5]++;
+        }
+        break;
+    default:
+        _RTC_byte_l = _DATA_STORE[4] << 4;
+        if (_RTC_byte_l == 0xA0) {
+            _RTC_byte_h = _DATA_STORE[4] >> 4;
+            _RTC_byte_h++;
+            _DATA_STORE[4] = _RTC_byte_h << 4;
+        }
+    }
+
+    if (_DATA_STORE[5] == 0x13) {   // Check month
+        _DATA_STORE[5] = 0x01;
+        _DATA_STORE[6]++;   // Add 1 year
+        _RTC_action_bits |= BIT2;   // Let's check the leap year later
+    } else {
+        _RTC_byte_l = _DATA_STORE[5] << 4;
+        if (_RTC_byte_l == 0xA0) {
+            _RTC_byte_h = _DATA_STORE[5] >> 4;
+            _RTC_byte_h++;
+            _DATA_STORE[5] = _RTC_byte_h << 4;
+        }
+    }
+
+    if (_DATA_STORE[6] == 0x9A) {   // Check year
+        _DATA_STORE[6] = 0x00;
+        _DATA_STORE[7]++;   // Add 1 century
+    } else {
+        _RTC_byte_l = _DATA_STORE[6] << 4;
+        if (_RTC_byte_l == 0xA0) {
+            _RTC_byte_h = _DATA_STORE[6] >> 4;
+            _RTC_byte_h++;
+            _DATA_STORE[6] = _RTC_byte_h << 4;
+        }
+    }
+    // After changes with the year
+    if (_RTC_action_bits & BIT2) {
+        // let's check the leap year property
+        _check_leap_year();
+        _RTC_action_bits &= ~BIT2;
+    }
+
+    if (_DATA_STORE[7] == 0x9A) {   // Check century
+        _DATA_STORE[7] = 0x00;  // Century start over
+    } else {
+        _RTC_byte_l = _DATA_STORE[7] << 4;
+        if (_RTC_byte_l == 0xA0) {
+            _RTC_byte_h = _DATA_STORE[7] >> 4;
+            _RTC_byte_h++;
+            _DATA_STORE[7] = _RTC_byte_h << 4;
+        }
     }
 }
 
@@ -249,143 +386,29 @@ void _UART_send_datetime() {
  */
 #pragma vector=TIMER0_A0_VECTOR
 __interrupt void Timer_A0(void) {
-    TACCR0 += _half_second;
-
-    // Toggle P1.0 output level every 0.5s
-    // to form a full 1-Hz square wave output
-    P1OUT ^= BIT0;
+    TACCR0 += _second_div;
 
     _second_tick++; // Increment the ticker
-    if (_second_tick == 2) {    // It's 1 second
-        // Do the main time increment logic here
-        _DATA_STORE[0]++;
-        if (_DATA_STORE[0] == 0x5A) {   // Check second
-            _DATA_STORE[0] = 0x00;
-            _DATA_STORE[1]++;   // Add 1 minute
-        } else {
-            _RTC_byte_l = _DATA_STORE[0] << 4;
-            if (_RTC_byte_l == 0xA0) {
-                _RTC_byte_h = _DATA_STORE[0] >> 4;
-                _RTC_byte_h++;
-                _DATA_STORE[0] = _RTC_byte_h << 4;
-            }
-        }
-
-        if (_DATA_STORE[1] == 0x5A) {   // Check minute, same logic with minute
-            _DATA_STORE[1] = 0x00;
-            _DATA_STORE[2]++;   // Add 1 hour
-        } else {
-            _RTC_byte_l = _DATA_STORE[1] << 4;
-            if (_RTC_byte_l == 0xA0) {
-                _RTC_byte_h = _DATA_STORE[1] >> 4;
-                _RTC_byte_h++;
-                _DATA_STORE[1] = _RTC_byte_h << 4;
-            }
-        }
-
-        if (_DATA_STORE[2] == 0x24) {   // Check hour
-            _DATA_STORE[2] = 0x00;
-            _DATA_STORE[3]++;   // Add 1 day
-            _DATA_STORE[4]++;   // Add 1 date
-        } else {
-            _RTC_byte_l = _DATA_STORE[2] << 4;
-            if (_RTC_byte_l == 0xA0) {
-                _RTC_byte_h = _DATA_STORE[2] >> 4;
-                _RTC_byte_h++;
-                _DATA_STORE[2] = _RTC_byte_h << 4;
-            }
-        }
-
-        if (_DATA_STORE[3] == 0x08)     // Check day
-            _DATA_STORE[3] = 0x01;
-
-        switch (_DATA_STORE[4]) {       // Check date
-        case 0x29:
-            if (_DATA_STORE[5] == 0x02 && !_is_leap_year) {   // It's February
-                _DATA_STORE[4] = 0x01;
-                _DATA_STORE[5]++;
-            }
-            break;
-        case 0x30:
-            if (_DATA_STORE[5] == 0x02) {   // It's February
-                _DATA_STORE[4] = 0x01;
-                _DATA_STORE[5]++;
-            }
-            break;
-        case 0x31:
-            if (_DATA_STORE[5] == 0x04
-                    || _DATA_STORE[5] == 0x06
-                    || _DATA_STORE[5] == 0x09
-                    || _DATA_STORE[5] == 0x11) {    // Apr, Jun, Sep, Nov with 30 days
-                _DATA_STORE[4] = 0x01;
-                _DATA_STORE[5]++;
-            }
-            break;
-        case 0x32:
-            if (_DATA_STORE[5] == 0x01
-                    || _DATA_STORE[5] == 0x03
-                    || _DATA_STORE[5] == 0x05
-                    || _DATA_STORE[5] == 0x07
-                    || _DATA_STORE[5] == 0x08
-                    || _DATA_STORE[5] == 0x10
-                    || _DATA_STORE[5] == 0x12) {    // Jan, Mar, May, Jul, Aug, Oct, Dec with 31 days
-                _DATA_STORE[4] = 0x01;
-                _DATA_STORE[5]++;
-            }
-            break;
-        default:
-            _RTC_byte_l = _DATA_STORE[4] << 4;
-            if (_RTC_byte_l == 0xA0) {
-                _RTC_byte_h = _DATA_STORE[4] >> 4;
-                _RTC_byte_h++;
-                _DATA_STORE[4] = _RTC_byte_h << 4;
-            }
-        }
-
-        if (_DATA_STORE[5] == 0x13) {   // Check month
-            _DATA_STORE[5] = 0x01;
-            _DATA_STORE[6]++;   // Add 1 year
-        } else {
-            _RTC_byte_l = _DATA_STORE[5] << 4;
-            if (_RTC_byte_l == 0xA0) {
-                _RTC_byte_h = _DATA_STORE[5] >> 4;
-                _RTC_byte_h++;
-                _DATA_STORE[5] = _RTC_byte_h << 4;
-            }
-        }
-
-        if (_DATA_STORE[6] == 0x9A) {   // Check year
-            _DATA_STORE[6] = 0x00;
-            _DATA_STORE[7]++;   // Add 1 century
-        } else {
-            _RTC_byte_l = _DATA_STORE[6] << 4;
-            if (_RTC_byte_l == 0xA0) {
-                _RTC_byte_h = _DATA_STORE[6] >> 4;
-                _RTC_byte_h++;
-                _DATA_STORE[6] = _RTC_byte_h << 4;
-            }
-        }
-        // After changes with the year
-        // let's check the leap year property
-        _check_leap_year();
-
-        if (_DATA_STORE[7] == 0x9A) {   // Check century
-            _DATA_STORE[7] = 0x00;  // Century start over
-        } else {
-            _RTC_byte_l = _DATA_STORE[7] << 4;
-            if (_RTC_byte_l == 0xA0) {
-                _RTC_byte_h = _DATA_STORE[7] >> 4;
-                _RTC_byte_h++;
-                _DATA_STORE[7] = _RTC_byte_h << 4;
-            }
-        }
-
+    switch (_second_tick) {
+#ifdef _UART_OUTPUT
+    case 4:
+        _RTC_action_bits |= BIT1;   // Let's send out data to UART
+        break;
+#endif
+    case 8:
+        // Toggle P1.0 output level every 0.5s
+        // to form a full 1-Hz square wave output
+        P1OUT ^= BIT0;
+        break;
+    case 12:
+        _RTC_action_bits |= BIT0;   // Let's do time increment now
+        break;
+    case 16:
+        // Toggle P1.0 output level every 0.5s
+        // to form a full 1-Hz square wave output
+        P1OUT ^= BIT0;
         _second_tick = 0;   // Reset ticker
     }
-
-#ifdef _UART_OUTPUT
-    _UART_send++;
-#endif
 }
 
 #ifdef _UART_OUTPUT

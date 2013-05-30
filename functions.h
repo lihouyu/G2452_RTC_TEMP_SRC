@@ -11,6 +11,7 @@
 
 void _init_DS();
 void _check_leap_year();
+void _time_increment();
 
 /***********************************************
  * Mandatory functions for callback
