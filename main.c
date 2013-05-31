@@ -51,7 +51,7 @@ unsigned char _DATA_STORE[31];  // Data storage
                                         // 0: Each alarm interrupt output is mapped to P2.0~P2.5
                                 // 30: Alarm interrupt flags
 
-const unsigned int _second_div = 2048;      // 1/16 of 1-Hz
+const unsigned int _second_div = 4095;      // 1/8 of 1-Hz with a bit tuning
 unsigned int _second_tick = 0;              // Ticker for a second
 unsigned char _is_leap_year = 0;            // Leap year indicator
 
@@ -129,7 +129,7 @@ void main(void) {
 #endif
 
     TACCR0 = _second_div;       // The timer clock is 32768-Hz
-                                // _second_div is 32768-Hz / 16
+                                // _second_div is 32768-Hz / 8
                                 // so that we have enough space for doing different actions
     TACCTL0 |= CCIE;            // Enable timer capture interrupt
 
@@ -368,19 +368,19 @@ __interrupt void Timer_A0(void) {
     _second_tick++; // Increment the ticker
     switch (_second_tick) {
 #ifdef _UART_OUTPUT
-    case 4:
+    case 2:
         _RTC_action_bits |= BIT1;   // Let's send out data to UART
         break;
 #endif
-    case 8:
+    case 4:
         // Toggle P1.0 output level every 0.5s
         // to form a full 1-Hz square wave output
         P1OUT ^= BIT0;
         break;
-    case 12:
+    case 6:
         _RTC_action_bits |= BIT0;   // Let's do time increment now
         break;
-    case 16:
+    case 8:
         // Toggle P1.0 output level every 0.5s
         // to form a full 1-Hz square wave output
         P1OUT ^= BIT0;
