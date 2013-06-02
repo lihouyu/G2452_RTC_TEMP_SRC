@@ -152,9 +152,12 @@ void main(void) {
     __enable_interrupt();
 
     while(1) {
-        if (_RTC_action_bits & BIT0) {
+        if (_RTC_action_bits & BIT0) {  // The main timer increment
             _time_increment();
             _RTC_action_bits &= ~BIT0;
+        }
+        if (_RTC_action_bits & BIT3) {  // Check alarm logic
+            _RTC_action_bits &= ~BIT3;
         }
 #ifdef _UART_OUTPUT
         if (_RTC_action_bits & BIT1) {
@@ -367,6 +370,9 @@ __interrupt void Timer_A0(void) {
 
     _second_tick++; // Increment the ticker
     switch (_second_tick) {
+    case 2:
+        _RTC_action_bits |= BIT3;   // Let's check alarms
+        break;
 #ifdef _UART_OUTPUT
     case 4:
         _RTC_action_bits |= BIT1;   // Let's send out data to UART
