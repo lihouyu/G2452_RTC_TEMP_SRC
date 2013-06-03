@@ -309,6 +309,13 @@ void _time_carry(unsigned char * byte) {
     }
 }
 
+/**
+ * Alarm logic here
+ */
+void _check_alarms() {
+
+}
+
 /***********************************************
  * Mandatory functions for callback
  * You can modify codes in these functions
@@ -373,11 +380,11 @@ __interrupt void Timer_A0(void) {
     case 2:
         _RTC_action_bits |= BIT3;   // Let's check alarms
         break;
-#ifdef _UART_OUTPUT
     case 4:
+#ifdef _UART_OUTPUT
         _RTC_action_bits |= BIT1;   // Let's send out data to UART
-        break;
 #endif
+        break;
     case 8:
         // Toggle P1.0 output level every 0.5s
         // to form a full 1-Hz square wave output

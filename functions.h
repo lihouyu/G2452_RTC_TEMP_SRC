@@ -13,6 +13,7 @@ void _init_DS();
 void _check_leap_year();
 void _time_increment();
 void _time_carry(unsigned char * byte);
+void _check_alarms();
 
 /***********************************************
  * Mandatory functions for callback
