@@ -42,10 +42,12 @@ unsigned char _DATA_STORE[31];  // Data storage
                                 // 8~10: Alarm1: minute(BCD), hour(BCD), day(s)(Bit Mask)
                                     // MSB of byte 9 is the match enable bit
                                 // 11~25: Same as 8~10 for Alarm2~Alarm6
-                                // 26: MSB of temperature
-                                // 27: LSB of temperature
+                                // 26: High parts of temperature
+                                // 27: Low parts of temperature
                                 // 28: Reserved for general configuration
                                     // BIT7: Dedicated interrupt output for Alarm1~3
+                                    // BIT6: Start temperature convert bit
+                                    // BIT5: Temperature convert finished flag
                                 // 29: Alarm interrupt enable bits
                                 // 30: Alarm interrupt flags
 
@@ -53,10 +55,15 @@ const unsigned int _second_div = 2048;      // 1/16 of 1-Hz with a bit tuning
 unsigned int _second_tick = 0;              // Ticker for a second
 unsigned char _is_leap_year = 0;            // Leap year indicator
 
+unsigned char _I2C_data_offset = 0;         // Offset for data accessing in I2C
+
 unsigned char _RTC_action_bits = 0x00;      // For marking actions in interrupt
                                             // and run the action in the main loop
+unsigned char _RTC_action_bits2 = 0x00;     // The extended action bits
 
 unsigned char _RTC_byte_l = 0, _RTC_byte_h = 0; // For calculation use
+unsigned int _TEMP_data = 0;                    // For holder temperature result data
+unsigned char _TEMP_data_user_read = 0;         // Temperature data read by user
 
 /***********************************************
  * Callback related variables (Mandatory)
@@ -95,8 +102,9 @@ void main(void) {
     P2REN |= (BIT3 + BIT4 + BIT5);  // Enable pull resistors
     P2OUT |= (BIT3 + BIT4 + BIT5);  // Using pull-up resistors
     // Setup pins for alarm interrupt output
-    P1DIR |= BIT5;              // Set P1.5 as unison alarm interrupt output pin
-    P1OUT &= ~BIT5;             // Set P1.5 low by default
+    P1DIR |= (BIT4 + BIT5);         // Set P1.5 as unison alarm interrupt output pin
+                                    // Set P1.4 as output for temperature convert finish interrupt
+    P1OUT &= ~(BIT4 + BIT5);        // Set P1.4, P1.5 low by default
     P2DIR |= (BIT0 + BIT1 + BIT2);  // Set P2.0~P2.2 as dedicated output for alarm1~3
     P2OUT &= ~(BIT0 + BIT1 + BIT2); // Default low
 
@@ -146,6 +154,11 @@ void main(void) {
     // Check leap year with initial data
     _check_leap_year();
 
+    // Prepare the ADC10 for temperature
+    // From TI's sample code
+    ADC10CTL1 = INCH_10 + ADC10DIV_3;
+    ADC10CTL0 = SREF_1 + ADC10SHT_3 + REFON + ADC10ON + ADC10IE;
+
     // Start I2C slave
     if (P1IN & BIT3)
         USI_I2C_slave_init(_I2C_addr);
@@ -167,7 +180,7 @@ void main(void) {
             _alarm_interrupt();
             _RTC_action_bits &= ~BIT4;
         }
-        if (_RTC_action_bits & BIT5) { // Reset alarm interrupt output
+        if (_RTC_action_bits & BIT5) {  // Reset alarm interrupt output
             _alarm_reset_interrupt();
             _RTC_action_bits &= ~BIT5;
         }
@@ -177,6 +190,27 @@ void main(void) {
             _RTC_action_bits &= ~BIT1;
         }
 #endif
+        if (_DATA_STORE[28] & BIT6) {   // Temperature convert start bit is set
+            ADC10CTL0 |= ENC + ADC10SC; // Start convert temperature
+            _DATA_STORE[28] &= ~BIT6;   // Clear the start bit
+        }
+        if (_RTC_action_bits & BIT6) {  // Go on transfer temperature data
+            ADC10CTL0 &= ~ENC;          // Manually clear ADC convert bit
+            _TEMP_data = ADC10MEM;
+            _DATA_STORE[26] = (char)(_TEMP_data >> 8);
+            _DATA_STORE[27] = (char)_TEMP_data;
+            _DATA_STORE[28] |= BIT5;    // Temperature data ready for access
+            _RTC_action_bits &= ~BIT6;
+        }
+        if (_RTC_action_bits2 & BIT0) {
+            if (_DATA_STORE[28] & BIT5) // If temperature data is ready, we trigger interrupt
+                P1OUT |= BIT4;
+            _RTC_action_bits2 &= ~BIT0;
+        }
+        if (_RTC_action_bits2 & BIT1) { // Reset temperature finish interrupt output
+            P1OUT &= ~BIT4;
+            _RTC_action_bits2 &= ~BIT1;
+        }
     }
 }
 
@@ -461,10 +495,60 @@ void _alarm_reset_interrupt() {
  *         but left function name unchanged
  ***********************************************/
 unsigned char * USI_I2C_slave_TX_callback() {
-    return _DATA_STORE;
+    unsigned char _I2C_data_offset_1;
+    _I2C_data_offset_1 = _I2C_data_offset;
+    if (_I2C_data_offset_1 == 26)           // User reading the high part of the temperature result
+        _TEMP_data_user_read = 1;
+    if (_I2C_data_offset_1 == 27 &&
+            _TEMP_data_user_read) {         // User reading the low part of the temperature result
+        _DATA_STORE[28] &= ~BIT5;           // Clear temperature data ready bit
+        _TEMP_data_user_read = 0;
+    }
+    _I2C_data_offset++;
+    return _DATA_STORE + _I2C_data_offset_1;
 }
 
 unsigned char USI_I2C_slave_RX_callback(unsigned char * byte) {
+    unsigned char byte_data;
+    byte_data = *byte;
+    if (!_USI_I2C_slave_n_byte)
+        _I2C_data_offset = byte_data;
+    else {
+        if (_I2C_data_offset != 26 &&
+                _I2C_data_offset != 27) {
+            switch(_I2C_data_offset) {
+            case 28:    // Do not allow 1 on BIT5 when BIT5 in _DATA_STORE[28] is 0
+                if (!(_DATA_STORE[28] & BIT5) &&
+                        (byte_data & BIT5))
+                    _DATA_STORE[28] = byte_data & ~BIT5;
+                break;
+            case 30:    // Do not allow 1 for alarm interrupt flags when flags are 0
+                if (!(_DATA_STORE[30] & BIT0) &&
+                        (byte_data & BIT0))
+                    byte_data &= ~BIT0;
+                if (!(_DATA_STORE[30] & BIT1) &&
+                        (byte_data & BIT1))
+                    byte_data &= ~BIT1;
+                if (!(_DATA_STORE[30] & BIT2) &&
+                        (byte_data & BIT2))
+                    byte_data &= ~BIT2;
+                if (!(_DATA_STORE[30] & BIT3) &&
+                        (byte_data & BIT3))
+                    byte_data &= ~BIT3;
+                if (!(_DATA_STORE[30] & BIT4) &&
+                        (byte_data & BIT4))
+                    byte_data &= ~BIT4;
+                if (!(_DATA_STORE[30] & BIT5) &&
+                        (byte_data & BIT5))
+                    byte_data &= ~BIT5;
+                _DATA_STORE[30] = byte_data;
+                break;
+            default:
+                *(_DATA_STORE + _I2C_data_offset) = byte_data;
+            }
+        }
+        _I2C_data_offset++;
+    }
     return 0;   // 0: No error; Not 0: Error in received data
 }
 
@@ -530,8 +614,14 @@ __interrupt void Timer_A0(void) {
         // to form a full 1-Hz square wave output
         P1OUT ^= BIT0;
         break;
+    case 10:
+        _RTC_action_bits2 |= BIT0;  // Send temperature ready interrupt if applicable
+        break;
     case 12:
         _RTC_action_bits |= BIT0;   // Let's do time increment now
+        break;
+    case 14:
+        _RTC_action_bits2 |= BIT1;  // Reset temperature ready interrupt
         break;
     case 16:
         // Toggle P1.0 output level every 0.5s
@@ -564,3 +654,9 @@ __interrupt void Timer_A1(void) {
     }
 }
 #endif
+
+// ADC10 interrupt service routine for temperature convert
+#pragma vector=ADC10_VECTOR
+__interrupt void ADC10_ISR(void) {
+    _RTC_action_bits |= BIT6;   // Temperature convert finished. Go on transfer data.
+}
