@@ -40,7 +40,7 @@ unsigned char _DATA_STORE[31];  // Data storage
                                 // 6: RTC year in BCD
                                 // 7: RTC century in BCD
                                 // 8~10: Alarm1: minute(BCD), hour(BCD), day(s)(Bit Mask)
-                                    // MSB of each byte sets the match action
+                                    // MSB of byte 9 is the match enable bit
                                 // 11~25: Same as 8~10 for Alarm2~Alarm6
                                 // 26: MSB of temperature
                                 // 27: LSB of temperature
@@ -96,9 +96,9 @@ void main(void) {
     P2OUT |= (BIT3 + BIT4 + BIT5);  // Using pull-up resistors
     // Setup pins for alarm interrupt output
     P1DIR |= BIT5;              // Set P1.5 as unison alarm interrupt output pin
-    P1OUT |= BIT5;              // Set P1.5 high by default
+    P1OUT &= ~BIT5;             // Set P1.5 low by default
     P2DIR |= (BIT0 + BIT1 + BIT2);  // Set P2.0~P2.2 as dedicated output for alarm1~3
-    P2OUT |= (BIT0 + BIT1 + BIT2);  // Default high
+    P2OUT &= ~(BIT0 + BIT1 + BIT2); // Default low
 
     // Set CPU speed based on P2 connection
     if (!(P2IN & BIT3)) {           // P2.3 low, set CPU speed at 8MHz
@@ -152,8 +152,6 @@ void main(void) {
     else
         USI_I2C_slave_init(_I2C_addr_op1);
 
-    P1OUT |= BIT0;              // Set P1.0 to high before 1-Hz output start
-
     __enable_interrupt();
 
     while(1) {
@@ -168,6 +166,10 @@ void main(void) {
         if (_RTC_action_bits & BIT4) {  // Check alarm interrupt
             _alarm_interrupt();
             _RTC_action_bits &= ~BIT4;
+        }
+        if (_RTC_action_bits & BIT5) { // Reset alarm interrupt output
+            _alarm_reset_interrupt();
+            _RTC_action_bits &= ~BIT5;
         }
 #ifdef _UART_OUTPUT
         if (_RTC_action_bits & BIT1) {
@@ -352,37 +354,37 @@ void _check_alarms() {
 
     // Alarm 1
     if (_DATA_STORE[1] == _DATA_STORE[8] &&
-            _DATA_STORE[2] == _DATA_STORE[9] &&
+            _DATA_STORE[2] + 0x80 == _DATA_STORE[9] &&
             (_DATA_STORE[10] & 0x80 ||
                     _DATA_STORE[10] & day_mask_bit))
         _DATA_STORE[30] |= BIT0;
     // Alarm 2
     if (_DATA_STORE[1] == _DATA_STORE[11] &&
-            _DATA_STORE[2] == _DATA_STORE[12] &&
+            _DATA_STORE[2] + 0x80 == _DATA_STORE[12] &&
             (_DATA_STORE[13] & 0x80 ||
                     _DATA_STORE[13] & day_mask_bit))
         _DATA_STORE[30] |= BIT1;
     // Alarm 3
     if (_DATA_STORE[1] == _DATA_STORE[14] &&
-            _DATA_STORE[2] == _DATA_STORE[15] &&
+            _DATA_STORE[2] + 0x80 == _DATA_STORE[15] &&
             (_DATA_STORE[16] & 0x80 ||
                     _DATA_STORE[16] & day_mask_bit))
         _DATA_STORE[30] |= BIT2;
     // Alarm 4
     if (_DATA_STORE[1] == _DATA_STORE[17] &&
-            _DATA_STORE[2] == _DATA_STORE[18] &&
+            _DATA_STORE[2] + 0x80 == _DATA_STORE[18] &&
             (_DATA_STORE[19] & 0x80 ||
                     _DATA_STORE[19] & day_mask_bit))
         _DATA_STORE[30] |= BIT3;
     // Alarm 5
     if (_DATA_STORE[1] == _DATA_STORE[20] &&
-            _DATA_STORE[2] == _DATA_STORE[21] &&
+            _DATA_STORE[2] + 0x80 == _DATA_STORE[21] &&
             (_DATA_STORE[22] & 0x80 ||
                     _DATA_STORE[22] & day_mask_bit))
         _DATA_STORE[30] |= BIT4;
     // Alarm 6
     if (_DATA_STORE[1] == _DATA_STORE[23] &&
-            _DATA_STORE[2] == _DATA_STORE[24] &&
+            _DATA_STORE[2] + 0x80 == _DATA_STORE[24] &&
             (_DATA_STORE[25] & 0x80 ||
                     _DATA_STORE[25] & day_mask_bit))
         _DATA_STORE[30] |= BIT5;
@@ -432,15 +434,23 @@ void _alarm_interrupt() {
             !INT_uni)
         INT_uni = 1;
 
-    // Toggle the interrupt output pin
+    // Set the interrupt output pin to high
     if (INT_uni)
-        P1OUT ^= BIT5;
+        P1OUT |= BIT5;
     if (INT_A1)
-        P2OUT ^= BIT0;
+        P2OUT |= BIT0;
     if (INT_A2)
-        P2OUT ^= BIT1;
+        P2OUT |= BIT1;
     if (INT_A3)
-        P2OUT ^= BIT2;
+        P2OUT |= BIT2;
+}
+
+/**
+ * Reset alarm interrupt output pin to low
+ */
+void _alarm_reset_interrupt() {
+    P1OUT &= ~BIT5;
+    P2OUT &= ~(BIT0 + BIT1 + BIT2);
 }
 
 /***********************************************
@@ -511,6 +521,9 @@ __interrupt void Timer_A0(void) {
 #ifdef _UART_OUTPUT
         _RTC_action_bits |= BIT1;   // Let's send out data to UART
 #endif
+        break;
+    case 6:
+        _RTC_action_bits |= BIT5;   // Reset alarm interrupt output after 4 division period
         break;
     case 8:
         // Toggle P1.0 output level every 0.5s
