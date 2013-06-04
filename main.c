@@ -511,9 +511,10 @@ unsigned char * USI_I2C_slave_TX_callback() {
 unsigned char USI_I2C_slave_RX_callback(unsigned char * byte) {
     unsigned char byte_data;
     byte_data = *byte;
-    if (!_USI_I2C_slave_n_byte)
+    if (!_USI_I2C_slave_n_byte) {
         _I2C_data_offset = byte_data;
-    else {
+        _USI_I2C_slave_n_byte = 1;
+    } else {
         if (_I2C_data_offset != 26 &&
                 _I2C_data_offset != 27) {
             switch(_I2C_data_offset) {
